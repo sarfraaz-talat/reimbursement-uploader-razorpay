@@ -1,0 +1,9 @@
+python-dotenv
+pytesseract
+opencv-python-headless
+requests
+playwright
+PyPDF2
+tqdm
+openai
+tabulate

@@ -1,0 +1,15 @@
+.DS_Store
+
+# Files
+files
+unprocessed-files/
+overbudget-bills/
+
+# Session store for playwright
+cookies.json
+
+# Pycache
+**/__pycache__/**
+
+# env
+.env
