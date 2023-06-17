@@ -1,5 +1,4 @@
 import time
-import sys
 from utils.playwright import init_playwright, submit_reimbursements, terminate_playwright
 from utils.parser import parse_reimbursement_data_from_images
 from playwright.sync_api import sync_playwright
@@ -12,16 +11,19 @@ def print_table(reimbursements):
 
     print(tabulate(table, headers=["Category", "Date", "Cost", "FilePath"], tablefmt="fancy_grid"))
 
+def upload_to_razorpay(playwright, reimbursements):
+    browser, page = init_playwright(playwright)
+    submit_reimbursements(page, reimbursements)
+    terminate_playwright(browser)
+
 def main():
     start_time = time.time()
-    debug_mode = sys.argv[1] == "debug" if len(sys.argv) > 1 else False
     with sync_playwright() as playwright:
-        reimbursements = parse_reimbursement_data_from_images('files')
+        reimbursements = parse_reimbursement_data_from_images('files/may')
         print_table(reimbursements)
-        if not debug_mode:
-            browser, page = init_playwright(playwright)
-            submit_reimbursements(page, reimbursements)
-            terminate_playwright(browser)
+        user_input = input("Proceed with upload on razorpay (y/n) ?")
+        if user_input.lower() == "y":
+            upload_to_razorpay(playwright, reimbursements)
 
     end_time = time.time()
     elapsed_time = end_time - start_time

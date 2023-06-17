@@ -55,7 +55,6 @@ def submit_reimbursements(page, reimbursements):
             page.goto('https://payroll.razorpay.com/reimbursements')
 
             # Fill in the date and amount fields
-            print(f"selecting :{reimbursement['category'].value}")
             page.select_option('#type', reimbursement['category'].value)
             page.click('.datepicker-past.picker__input')
             page.select_option('#expense-date-past >> .picker__select--year',f'{reimbursement["date"].year}')

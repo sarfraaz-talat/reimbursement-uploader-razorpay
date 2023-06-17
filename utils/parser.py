@@ -2,31 +2,82 @@ import os
 from datetime import datetime
 from utils.ocr import process_image, process_pdf
 from utils.const import Category, budgets, reasons
-from utils.env import openai_model
+from utils.env import openai_model, default_month, default_year
 import shutil
 from tqdm import tqdm
 import openai
+import json
+from tenacity import retry, stop_after_attempt
 
-def category_parser(text):
-    response = openai.ChatCompletion.create(
-    model=openai_model,
-    messages=[
-            {"role": "system", "content": f"You are a helpful assistant. Having deep knowledge of images and the ocr tools, how the text generation happens from the image. You will be given a text chunk which is generated from an image using ocr library. You need to read the text which understandably might contain some gibberish text and noise, but you need to read it and identify which category this text belongs to. The categories are TRAVEL, TELEPHONE, INTERNET, HEALTH. The response must contain only one of these category and nothing else. If you are not sure, give the category response as UNKNOWN."},
-            {"role": "user", "content": f"The text of ocr start from next line\n{text}"}
-        ]
-    )
-    return response.choices[0].message.content
-
-def cost_date_parser(text):
-    response = openai.ChatCompletion.create(
-    model=openai_model,
-    messages=[
-            {"role": "system", "content": f"You are a helpful assistant. Having deep knowledge of images and the ocr tools, how the text generation happens from the image. You will be given a text chunk which is generated from an image using ocr library. The image is from a utility bill of any of these category TRAVEL, TELEPHONE, INTERNET, HEALTH. You need to read the text and parse the date and final cost from the same. The date might be in different formats in different types of bills you need to be mindful of that and try to parse date from the same still and sometimes some important characters ike / might be missing from the date since its ocr output, you need to work through these issues and figure out the date. Same goes for cost as well. One trick for cost is that for most of the bills, cost will be in 3 digits before fractions. The output should be `date:cost` and nothing else. date in the output must be strictly in this format `%d-%m-%Y` Example `25-04-2023` regardless of what format it was in the ocr text. In cases where there are multiple dates in the given text, look for text alongside same which suggests this might be the date of billing or date of order or something along the lines. Be very mindful of the output format, it strictly should be in the given date format then cost separated by collon without containing any single character extra in response, not even any text supporting date or any currency symbols in cost"},
-            {"role": "user", "content": f"The text of ocr start from next line\n{text}"}
-        ]
-    )
-    return response.choices[0].message.content.split(":")
-
+@retry(stop=stop_after_attempt(3))
+def content_parser(text):
+    try:
+        response = openai.ChatCompletion.create(
+            model=openai_model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": text
+                }
+            ],
+            functions=[
+                {
+                    "name": "upload_reimbursement",
+                    "description": "Upload reimbursements",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "date": {
+                                "type": "string",
+                                "description": f"The date in DD-MM-YYYY format string, use {default_year} for default year value & {default_month} for default month value when unable to extract those values from the input"
+                            },
+                            "category": {
+                                "type": "string",
+                                "enum": [
+                                    "TRAVEL", "TELEPHONE", "INTERNET", "HEALTH"
+                                ]
+                            },
+                            "cost": {
+                                "type": "number",
+                                "description": "Cost extracted from content, should not be greater than 2000 for cab rides, if you see cost greater than 2000 for cost its probably rupee icon misunderstood by ocr, so costs like 2140 for cabs, consider as Rupee 140"
+                            }
+                        },
+                        "required": [
+                            "category","date","cost"
+                        ]
+                    }
+                }
+            ]
+        )
+        return json.loads(response.choices[0].message.function_call.arguments)
+    except openai.error.Timeout as e:
+        #Handle timeout error, e.g. retry or log
+        print(f"OpenAI API request timed out: {e}")
+        pass
+    except openai.error.APIError as e:
+        #Handle API error, e.g. retry or log
+        print(f"OpenAI API returned an API Error: {e}")
+        pass
+    except openai.error.APIConnectionError as e:
+        #Handle connection error, e.g. check network or log
+        print(f"OpenAI API request failed to connect: {e}")
+        pass
+    except openai.error.InvalidRequestError as e:
+        #Handle invalid request error, e.g. validate parameters or log
+        print(f"OpenAI API request was invalid: {e}")
+        pass
+    except openai.error.AuthenticationError as e:
+        #Handle authentication error, e.g. check credentials or log
+        print(f"OpenAI API request was not authorized: {e}")
+        pass
+    except openai.error.PermissionError as e:
+        #Handle permission error, e.g. check scope or log
+        print(f"OpenAI API request was not permitted: {e}")
+        pass
+    except openai.error.RateLimitError as e:
+        #Handle rate limit error, e.g. wait or log
+        print(f"OpenAI API request exceeded rate limit: {e}")
+        pass
 def prepare_reimbursement(cost, date, category, filepath):
     return {
         'filepath': filepath,
@@ -56,19 +107,15 @@ def parse_reimbursement_data_from_images(dir_name):
                         text = process_pdf(image_path)
                     else:
                         text = process_image(image_path)
-                    category = category_parser(text)
-                    if category == Category.UNKNOWN.name:
-                        unprocessed_fies.append(image_path)
-                        continue
                     filepath = os.path.join(directory, filename)
-                    print(f"text : ${text}")
-                    date, cost = cost_date_parser(text)
-                    reimbursement = prepare_reimbursement(cost, date, category, filepath)
-                except:
+                    parsed_data = content_parser(text)
+                    reimbursement = prepare_reimbursement(parsed_data["cost"], parsed_data["date"], parsed_data["category"], filepath)
+                except Exception as e:
+                    print("Error",e)
                     unprocessed_fies.append(image_path)
                     continue
                 
-                budget = budgets[Category[category]]
+                budget = budgets[Category[parsed_data["category"]]]
                 total_cost = sum([float(o["cost"]) for o in success_reimbursements if o["category"] == reimbursement['category']])
 
                 if total_cost >= budget:
